@@ -46,7 +46,7 @@ python -m playwright install chromium
 /gh merge <owner/repo#PR> [方式] [true|false] 检查规则后合并；true 请求强制绕过
 ```
 
-PR 标识支持 `octocat/Hello-World#42` 或完整的 GitHub PR URL。`view` 使用无头 Chromium 把 GitHub API 返回的 diff 渲染成图片，按文件和页发送；可以给出文件路径来只查看单个文件。
+PR 标识支持 `octocat/Hello-World#42` 或完整的 GitHub PR URL。`view` 使用无头 Chromium 把 GitHub API 返回的 diff 渲染成图片，并在同一条混合消息中发送 PR 描述、变更文件清单和多张截图；可以给出文件路径来只截图单个文件。
 
 `approve` 不能用于批准当前 Token 所属账号自己创建的 PR。遇到这种情况，请换用另一位对仓库有写入权限的用户 Token；插件会在提交 review 前提示这一限制。
 

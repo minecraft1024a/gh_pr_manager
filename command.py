@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+from uuid import uuid4
 
 from src.app.plugin_system.api import storage_api, stream_api
-from src.app.plugin_system.api.send_api import send_image, send_text
+from src.app.plugin_system.api.send_api import send_message, send_text
 from src.app.plugin_system.base import BaseCommand, cmd_route
 from src.app.plugin_system.types import PermissionLevel
+from src.core.models.message import Message, MessageType
 
 from .diff_renderer import screenshot_diff
 from .github_api import (
@@ -203,27 +205,53 @@ class GitHubPRCommand(BaseCommand):
             await self._reply(message)
             return False, message
 
-        overview = (
-            f"{ref.owner}/{ref.repo}#{ref.number} · {pull.get('title', '')}\n"
-            f"{pull.get('state', '')} · {len(files)} 个文件 · "
-            f"+{pull.get('additions', 0)} / -{pull.get('deletions', 0)}\n"
-            f"{pull.get('html_url', '')}"
+        file_lines = ["变更文件："]
+        for item in files:
+            file_lines.append(
+                f"- {item.get('filename', '(unknown file)')} "
+                f"(+{item.get('additions', 0)} / -{item.get('deletions', 0)})"
+            )
+        description = str(pull.get("body") or "").strip() or "（无 PR 说明）"
+        status = "已合并" if pull.get("merged") else str(pull.get("state", "unknown"))
+        overview_lines = [
+            f"{ref.owner}/{ref.repo}#{ref.number} · {pull.get('title', '')}",
+            f"作者：{((pull.get('user') or {}).get('login')) or 'unknown'} · 状态：{status}",
+            f"{len(files)} 个文件 · +{pull.get('additions', 0)} / -{pull.get('deletions', 0)}",
+            str(pull.get("html_url") or ""),
+            *file_lines,
+            "",
+            "PR 说明：",
+            description,
+        ]
+        if file_path:
+            overview_lines.extend(["", f"截图筛选：{file_path}"])
+        overview_lines.extend(["", f"Diff 截图：{len(screenshots)} 张（附在本消息中）"])
+        overview = "\n".join(line for line in overview_lines if line is not None)
+
+        media_items = [
+            {
+                "type": "image",
+                "data": f"base64|{base64.b64encode(image_bytes).decode('ascii')}",
+            }
+            for _, image_bytes in screenshots
+        ]
+        stream_info = await stream_api.get_stream_info(self.stream_id)
+        mixed_message = Message(
+            message_id=f"api_gh_pr_view_{uuid4().hex}",
+            content={"text": overview, "media": media_items},
+            processed_plain_text=overview,
+            message_type=MessageType.TEXT,
+            platform=str(self._message.platform or "") if self._message is not None else "",
+            chat_type=str((stream_info or {}).get("chat_type") or "private"),
+            stream_id=self.stream_id,
+            media=media_items,
         )
-        await self._reply(overview)
-        sent = 0
-        for label, image_bytes in screenshots:
-            encoded = base64.b64encode(image_bytes).decode("ascii")
-            if await send_image(
-                encoded,
-                stream_id=self.stream_id,
-                processed_plain_text=f"{ref.owner}/{ref.repo}#{ref.number} diff：{label}",
-            ):
-                sent += 1
-        message = f"已发送 {sent}/{len(screenshots)} 张无头浏览器 diff 截图。"
-        if sent != len(screenshots):
-            message += "部分图片未能通过当前平台发送。"
-        await self._reply(message)
-        return sent == len(screenshots), message
+        sent = await send_message(mixed_message)
+        if not sent:
+            message = "PR 信息和 diff 截图未能作为混合消息发送，请检查当前平台对图文消息的支持。"
+            await self._reply(message)
+            return False, message
+        return True, overview
 
     @cmd_route("approve")
     async def handle_approve(self, pr_ref: str) -> tuple[bool, str]:
