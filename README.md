@@ -40,13 +40,15 @@ python -m playwright install chromium
 ```text
 /gh                                      显示帮助
 /gh list <owner/repo> [open|closed|all]  列出最多 20 个 PR
-/gh view <owner/repo#PR> [文件路径]       截图并发送 PR diff
+/gh view <owner/repo#PR> [文件路径] [说明图 true|false] 截图并发送 PR 信息
 /gh approve <owner/repo#PR>              提交 APPROVE review
 /gh close <owner/repo#PR>                关闭尚未合并的 PR
 /gh merge <owner/repo#PR> [方式] [true|false] 检查规则后合并；true 请求强制绕过
 ```
 
-PR 标识支持 `octocat/Hello-World#42` 或完整的 GitHub PR URL。`view` 使用无头 Chromium 把 GitHub API 返回的 diff 渲染成图片，并在同一条混合消息中发送 PR 描述、变更文件清单和多张截图；可以给出文件路径来只截图单个文件。
+PR 标识支持 `octocat/Hello-World#42` 或完整的 GitHub PR URL。`view` 使用无头 Chromium 在同一条混合消息中发送 PR 描述、变更文件清单、GitHub 风格文件树图片和多张 diff 图片。可给出文件路径来只截图单个文件；末尾可加 `true` 额外发送 PR 说明图片，默认 `false`。
+
+示例：`/gh view owner/repo#42 true`，或 `/gh view owner/repo#42 src/command.py true`。
 
 `approve` 不能用于批准当前 Token 所属账号自己创建的 PR。遇到这种情况，请换用另一位对仓库有写入权限的用户 Token；插件会在提交 review 前提示这一限制。
 
