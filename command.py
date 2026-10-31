@@ -233,6 +233,13 @@ class GitHubPRCommand(BaseCommand):
             pull = await client.get_pull(ref)
             if pull.get("state") != "open" or pull.get("merged"):
                 raise RuntimeError("只能审批仍处于打开状态的 PR。")
+            author = (pull.get("user") or {}).get("login")
+            actor = await client.validate_token()
+            if author and actor.casefold() == str(author).casefold():
+                raise RuntimeError(
+                    f"当前 Token 属于账号 {actor}，而该账号是这条 PR 的作者。"
+                    "GitHub 不允许作者批准自己的 PR；请改用另一位有仓库写入权限的用户 Token。"
+                )
             result = await client.approve(ref)
         except Exception as exc:
             message = f"审批 PR 失败：{exc}"

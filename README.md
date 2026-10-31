@@ -48,6 +48,8 @@ python -m playwright install chromium
 
 PR 标识支持 `octocat/Hello-World#42` 或完整的 GitHub PR URL。`view` 使用无头 Chromium 把 GitHub API 返回的 diff 渲染成图片，按文件和页发送；可以给出文件路径来只查看单个文件。
 
+`approve` 不能用于批准当前 Token 所属账号自己创建的 PR。遇到这种情况，请换用另一位对仓库有写入权限的用户 Token；插件会在提交 review 前提示这一限制。
+
 `merge` 会读取经典分支保护和活动 Rulesets，检查 PR 状态、Draft/冲突/落后状态、审批数、审批者是否具有写入权限、最新提交审批要求及必需状态检查。若目标分支要求 Merge Queue，插件不会直接合并。通过本地预检查后，仍由 GitHub 的合并 API 最终校验仓库的全部保护规则；插件不请求或使用任何管理员绕过选项。规则或权限读取失败时会停止，不会尝试合并。
 
 ## 令牌范围
