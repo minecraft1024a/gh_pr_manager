@@ -1,7 +1,7 @@
 {
     "name": "gh_pr_manager",
     "display_name": "GitHub PR 管理",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "description": "按平台和用户隔离 GitHub Token，查看、截图、审批、关闭和按规则合并 Pull Request",
     "author": "AI-assisted",
     "license": "MIT",

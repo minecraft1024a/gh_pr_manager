@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+from uuid import uuid4
 
 from src.app.plugin_system.api import storage_api, stream_api
-from src.app.plugin_system.api.send_api import send_image, send_text
+from src.app.plugin_system.api.send_api import send_message, send_text
 from src.app.plugin_system.base import BaseCommand, cmd_route
 from src.app.plugin_system.types import PermissionLevel
+from src.core.models.message import Message, MessageType
 
 from .diff_renderer import screenshot_diff
 from .github_api import (
@@ -27,7 +29,7 @@ _HELP = """/gh 用法：
   /gh view <owner/repo#PR> [文件路径]       查看 PR 并发送 diff 截图
   /gh approve <owner/repo#PR>              提交 APPROVE 审批
   /gh close <owner/repo#PR>                关闭 PR
-  /gh merge <owner/repo#PR> [merge|squash|rebase] 检查规则并尝试合并
+  /gh merge <owner/repo#PR> [merge|squash|rebase] [true|false] 按规则合并；true 请求强制绕过
 
 PR 示例：/gh view octocat/Hello-World#42"""
 
@@ -203,27 +205,53 @@ class GitHubPRCommand(BaseCommand):
             await self._reply(message)
             return False, message
 
-        overview = (
-            f"{ref.owner}/{ref.repo}#{ref.number} · {pull.get('title', '')}\n"
-            f"{pull.get('state', '')} · {len(files)} 个文件 · "
-            f"+{pull.get('additions', 0)} / -{pull.get('deletions', 0)}\n"
-            f"{pull.get('html_url', '')}"
+        file_lines = ["变更文件："]
+        for item in files:
+            file_lines.append(
+                f"- {item.get('filename', '(unknown file)')} "
+                f"(+{item.get('additions', 0)} / -{item.get('deletions', 0)})"
+            )
+        description = str(pull.get("body") or "").strip() or "（无 PR 说明）"
+        status = "已合并" if pull.get("merged") else str(pull.get("state", "unknown"))
+        overview_lines = [
+            f"{ref.owner}/{ref.repo}#{ref.number} · {pull.get('title', '')}",
+            f"作者：{((pull.get('user') or {}).get('login')) or 'unknown'} · 状态：{status}",
+            f"{len(files)} 个文件 · +{pull.get('additions', 0)} / -{pull.get('deletions', 0)}",
+            str(pull.get("html_url") or ""),
+            *file_lines,
+            "",
+            "PR 说明：",
+            description,
+        ]
+        if file_path:
+            overview_lines.extend(["", f"截图筛选：{file_path}"])
+        overview_lines.extend(["", f"Diff 截图：{len(screenshots)} 张（附在本消息中）"])
+        overview = "\n".join(line for line in overview_lines if line is not None)
+
+        media_items = [
+            {
+                "type": "image",
+                "data": f"base64|{base64.b64encode(image_bytes).decode('ascii')}",
+            }
+            for _, image_bytes in screenshots
+        ]
+        stream_info = await stream_api.get_stream_info(self.stream_id)
+        mixed_message = Message(
+            message_id=f"api_gh_pr_view_{uuid4().hex}",
+            content={"text": overview, "media": media_items},
+            processed_plain_text=overview,
+            message_type=MessageType.TEXT,
+            platform=str(self._message.platform or "") if self._message is not None else "",
+            chat_type=str((stream_info or {}).get("chat_type") or "private"),
+            stream_id=self.stream_id,
+            media=media_items,
         )
-        await self._reply(overview)
-        sent = 0
-        for label, image_bytes in screenshots:
-            encoded = base64.b64encode(image_bytes).decode("ascii")
-            if await send_image(
-                encoded,
-                stream_id=self.stream_id,
-                processed_plain_text=f"{ref.owner}/{ref.repo}#{ref.number} diff：{label}",
-            ):
-                sent += 1
-        message = f"已发送 {sent}/{len(screenshots)} 张无头浏览器 diff 截图。"
-        if sent != len(screenshots):
-            message += "部分图片未能通过当前平台发送。"
-        await self._reply(message)
-        return sent == len(screenshots), message
+        sent = await send_message(mixed_message)
+        if not sent:
+            message = "PR 信息和 diff 截图未能作为混合消息发送，请检查当前平台对图文消息的支持。"
+            await self._reply(message)
+            return False, message
+        return True, overview
 
     @cmd_route("approve")
     async def handle_approve(self, pr_ref: str) -> tuple[bool, str]:
@@ -233,6 +261,13 @@ class GitHubPRCommand(BaseCommand):
             pull = await client.get_pull(ref)
             if pull.get("state") != "open" or pull.get("merged"):
                 raise RuntimeError("只能审批仍处于打开状态的 PR。")
+            author = (pull.get("user") or {}).get("login")
+            actor = await client.validate_token()
+            if author and actor.casefold() == str(author).casefold():
+                raise RuntimeError(
+                    f"当前 Token 属于账号 {actor}，而该账号是这条 PR 的作者。"
+                    "GitHub 不允许作者批准自己的 PR；请改用另一位有仓库写入权限的用户 Token。"
+                )
             result = await client.approve(ref)
         except Exception as exc:
             message = f"审批 PR 失败：{exc}"
@@ -265,24 +300,44 @@ class GitHubPRCommand(BaseCommand):
         return True, message
 
     @cmd_route("merge")
-    async def handle_merge(self, pr_ref: str, method: str = "merge") -> tuple[bool, str]:
+    async def handle_merge(
+        self, pr_ref: str, method: str = "merge", force: str = "false"
+    ) -> tuple[bool, str]:
+        if method.strip().lower() in {"true", "false"} and force == "false":
+            force = method
+            method = "merge"
         method = method.lower()
         if method not in {"merge", "squash", "rebase"}:
             message = "合并方式只能是 merge、squash 或 rebase。"
             await self._reply(message)
             return False, message
+        force_value = force.strip().lower()
+        if force_value not in {"true", "false"}:
+            message = "force 参数只能是 true 或 false，默认 false。"
+            await self._reply(message)
+            return False, message
+        force_merge = force_value == "true"
         try:
             ref = parse_pr_ref(pr_ref)
             client = await self._client()
             pull = await client.get_pull(ref)
-            problems = await client.check_merge_requirements(ref, pull, method)
-            if problems:
-                message = "检查未通过，未执行合并：\n- " + "\n- ".join(problems)
-                await self._reply(message)
-                return False, message
-            result = await client.merge(ref, method)
+            if force_merge:
+                problems = client.check_force_merge_basics(pull)
+                if problems:
+                    message = "强制合并也无法继续：\n- " + "\n- ".join(problems)
+                    await self._reply(message)
+                    return False, message
+                head_sha = str((pull.get("head") or {}).get("sha") or "")
+                result = await client.force_merge(ref, method, head_sha)
+            else:
+                problems = await client.check_merge_requirements(ref, pull, method)
+                if problems:
+                    message = "检查未通过，未执行合并：\n- " + "\n- ".join(problems)
+                    await self._reply(message)
+                    return False, message
+                result = await client.merge(ref, method)
         except GitHubAPIError as exc:
-            message = f"GitHub 拒绝合并（未绕过仓库规则）：{exc}"
+            message = f"GitHub 拒绝{'强制' if force_merge else ''}合并：{exc}"
             await self._reply(message)
             return False, message
         except (MergeBlockedError, ValueError, RuntimeError) as exc:
@@ -294,9 +349,31 @@ class GitHubPRCommand(BaseCommand):
             await self._reply(message)
             return False, message
 
-        message = (
-            f"已合并 {ref.owner}/{ref.repo}#{ref.number}，方式：{method}。\n"
-            f"{result.get('html_url', '')}"
-        )
+        if force_merge:
+            status = str(result.get("status", ""))
+            html_url = str(pull.get("html_url") or "").strip()
+            if status == "merged":
+                message = f"已强制合并 {ref.owner}/{ref.repo}#{ref.number}，方式：{method}。"
+            elif status == "enqueued":
+                message = f"强制合并请求已进入 GitHub 合并队列，尚未完成合并：{ref.owner}/{ref.repo}#{ref.number}。"
+            elif status == "pending":
+                message = f"强制合并请求已提交，GitHub 正在处理；目前尚未确认合并：{ref.owner}/{ref.repo}#{ref.number}。"
+            elif status == "failed":
+                details = result.get("details") or {}
+                detail = str(details.get("message") or "GitHub 未提供失败原因。")
+                message = f"GitHub 强制合并失败：{detail}"
+                await self._reply(message)
+                return False, message
+            else:
+                details = result.get("details") or {}
+                detail = str(details.get("message") or "GitHub 未返回可识别的合并状态。")
+                message = f"强制合并结果未确认：{detail}"
+                await self._reply(message)
+                return False, message
+        else:
+            message = f"已合并 {ref.owner}/{ref.repo}#{ref.number}，方式：{method}。"
+            html_url = str(pull.get("html_url") or result.get("html_url") or "").strip()
+        if html_url:
+            message += f"\n{html_url}"
         await self._reply(message)
         return True, message

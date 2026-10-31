@@ -369,6 +369,24 @@ class GitHubClient:
         problems.extend(await self.check_named_statuses(ref, head_sha, required_contexts))
         return problems
 
+    @staticmethod
+    def check_force_merge_basics(pull: dict[str, Any]) -> list[str]:
+        """强制合并仍拒绝已关闭、Draft、冲突或尚未完成可合并性计算的 PR。"""
+
+        problems: list[str] = []
+        if pull.get("merged"):
+            problems.append("PR 已经合并。")
+        elif pull.get("state") != "open":
+            problems.append("PR 已关闭，不能合并。")
+        if pull.get("draft"):
+            problems.append("PR 仍处于 Draft 状态。")
+        mergeable_state = pull.get("mergeable_state")
+        if pull.get("mergeable") is not True or mergeable_state in {"dirty", "unknown"}:
+            problems.append("GitHub 未确认 PR 无冲突且可合并，请稍后重试。")
+        if not str((pull.get("head") or {}).get("sha") or ""):
+            problems.append("无法读取 PR head commit，停止强制合并。")
+        return problems
+
     async def approve(self, ref: PullRequestRef) -> dict[str, Any]:
         return await self.request(
             "POST",
@@ -390,4 +408,20 @@ class GitHubClient:
             "PUT",
             f"{ref.repo_path}/pulls/{ref.number}/merge",
             {"merge_method": method},
+        )
+
+    async def force_merge(
+        self, ref: PullRequestRef, method: str, expected_head_sha: str
+    ) -> dict[str, Any]:
+        """请求 GitHub 绕过当前 token 有权绕过的规则并直接合并。"""
+
+        return await self.request(
+            "PUT",
+            f"{ref.repo_path}/pulls/{ref.number}/merge-async",
+            {
+                "merge_method": method,
+                "merge_action": "direct_merge",
+                "bypass_rules": True,
+                "sha": expected_head_sha,
+            },
         )
