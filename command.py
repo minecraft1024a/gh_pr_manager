@@ -13,7 +13,7 @@ from src.app.plugin_system.base import BaseCommand, cmd_route
 from src.app.plugin_system.types import PermissionLevel
 from src.core.models.message import Message, MessageType
 
-from .diff_renderer import screenshot_diff
+from .diff_renderer import screenshot_pr_view
 from .github_api import (
     GitHubAPIError,
     GitHubClient,
@@ -26,7 +26,7 @@ _HELP = """/gh 用法：
   /gh token set <gh_token>                 在私聊设置个人 GitHub Token
   /gh token clear                         删除当前平台和用户 ID 的 Token
   /gh list <owner/repo> [open|closed|all]  列出 PR
-  /gh view <owner/repo#PR> [文件路径]       查看 PR 并发送 diff 截图
+  /gh view <owner/repo#PR> [文件路径] [说明图 true|false] 查看 PR（默认不附说明图）
   /gh approve <owner/repo#PR>              提交 APPROVE 审批
   /gh close <owner/repo#PR>                关闭 PR
   /gh merge <owner/repo#PR> [merge|squash|rebase] [true|false] 按规则合并；true 请求强制绕过
@@ -187,18 +187,33 @@ class GitHubPRCommand(BaseCommand):
         return True, message
 
     @cmd_route("view")
-    async def handle_view(self, pr_ref: str, file_path: str = "") -> tuple[bool, str]:
+    async def handle_view(
+        self,
+        pr_ref: str,
+        file_path: str = "",
+        description_image: str = "false",
+    ) -> tuple[bool, str]:
+        if file_path.strip().lower() in {"true", "false"} and description_image == "false":
+            description_image = file_path
+            file_path = ""
+        description_option = description_image.strip().lower()
+        if description_option not in {"true", "false"}:
+            message = "PR 说明图参数只能是 true 或 false，默认 false。"
+            await self._reply(message)
+            return False, message
+        include_description_image = description_option == "true"
         try:
             ref = parse_pr_ref(pr_ref)
             client = await self._client()
             pull, files = await asyncio.gather(
                 client.get_pull(ref), client.list_pull_files(ref)
             )
-            screenshots = await screenshot_diff(
+            screenshots = await screenshot_pr_view(
                 repository=f"{ref.owner}/{ref.repo}",
                 pull=pull,
                 files=files,
                 file_filter=file_path,
+                include_description_image=include_description_image,
             )
         except Exception as exc:
             message = f"读取或截图 PR 失败：{exc}"
@@ -213,6 +228,7 @@ class GitHubPRCommand(BaseCommand):
             )
         description = str(pull.get("body") or "").strip() or "（无 PR 说明）"
         status = "已合并" if pull.get("merged") else str(pull.get("state", "unknown"))
+        diff_count = len(screenshots) - 1 - int(include_description_image)
         overview_lines = [
             f"{ref.owner}/{ref.repo}#{ref.number} · {pull.get('title', '')}",
             f"作者：{((pull.get('user') or {}).get('login')) or 'unknown'} · 状态：{status}",
@@ -225,7 +241,13 @@ class GitHubPRCommand(BaseCommand):
         ]
         if file_path:
             overview_lines.extend(["", f"截图筛选：{file_path}"])
-        overview_lines.extend(["", f"Diff 截图：{len(screenshots)} 张（附在本消息中）"])
+        description_image_status = "已附" if include_description_image else "未附"
+        overview_lines.extend(
+            [
+                "",
+                f"附图：文件树 1 张 · PR 说明图{description_image_status} · Diff {diff_count} 张",
+            ]
+        )
         overview = "\n".join(line for line in overview_lines if line is not None)
 
         media_items = [
