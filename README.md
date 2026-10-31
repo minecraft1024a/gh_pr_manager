@@ -1,6 +1,6 @@
 # GitHub PR 管理（Neo-MoFox）
 
-这是一个通过 GitHub REST API 管理 Pull Request 的 Neo-MoFox 插件。命令仅允许 OWNER 使用。
+这是一个通过 GitHub REST API 管理 Pull Request 的 Neo-MoFox 插件。每位用户按平台和用户 ID 使用自己的 GitHub Token。
 
 > 本插件为 AI 编程生成；不建议参考其代码作为示例。使用前请自行审阅并在自己的环境中验证。
 
@@ -23,7 +23,9 @@ python -m playwright install chromium
 /gh token set <gh_token>
 ```
 
-插件会先调用 GitHub `/user` 验证 Token，然后存入 `data/json_storage/gh_pr_manager/credentials.json`，尽可能将文件权限设为 `0600`、目录设为 `0700`。命令回复和日志不会回显 Token。Token 命令本身仍会作为原始聊天消息存在，因此只应在可信的主人私聊中设置，不要在群聊里发送。
+插件会先调用 GitHub `/user` 验证 Token，然后按平台和用户 ID 分开存入 `data/json_storage/gh_pr_manager/`。不同用户或不同平台的 Token 不会共用。命令回复和日志不会回显 Token。Token 命令本身仍会作为原始聊天消息存在，因此请在私聊中设置；插件也会拒绝在群聊中设置 Token。
+
+从 v1.0.x 升级后，旧版共享 Token 不会迁移；首次使用新版时会清除旧共享凭据文件。每位用户需要重新设置自己的 Token。
 
 清除凭据：
 
@@ -40,6 +42,7 @@ python -m playwright install chromium
 /gh list <owner/repo> [open|closed|all]  列出最多 20 个 PR
 /gh view <owner/repo#PR> [文件路径]       截图并发送 PR diff
 /gh approve <owner/repo#PR>              提交 APPROVE review
+/gh close <owner/repo#PR>                关闭尚未合并的 PR
 /gh merge <owner/repo#PR> [方式]           检查规则后合并
 ```
 

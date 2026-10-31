@@ -101,7 +101,7 @@ class GitHubClient:
             raise GitHubAPIError(exc.code, f"HTTP {exc.code}: {message}") from None
         except (URLError, TimeoutError, OSError) as exc:
             # 不把 Request 或 headers 加入错误，避免异常上下文泄露授权头。
-            reason = getattr(exc, "reason", None)
+            reason = exc.reason if isinstance(exc, URLError) else None
             if isinstance(reason, str) and len(reason) < 180:
                 raise RuntimeError(f"连接 GitHub 失败：{reason}") from None
             raise RuntimeError("连接 GitHub 失败，请检查网络后重试") from None
@@ -374,6 +374,13 @@ class GitHubClient:
             "POST",
             f"{ref.repo_path}/pulls/{ref.number}/reviews",
             {"event": "APPROVE"},
+        )
+
+    async def close_pull(self, ref: PullRequestRef) -> dict[str, Any]:
+        return await self.request(
+            "PATCH",
+            f"{ref.repo_path}/pulls/{ref.number}",
+            {"state": "closed"},
         )
 
     async def merge(
