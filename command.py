@@ -7,7 +7,7 @@ import base64
 import os
 from pathlib import Path
 
-from src.app.plugin_system.api import storage_api
+from src.app.plugin_system.api import storage_api, stream_api
 from src.app.plugin_system.api.send_api import send_image, send_text
 from src.app.plugin_system.base import BaseCommand, cmd_route
 from src.app.plugin_system.types import PermissionLevel
@@ -91,6 +91,13 @@ class GitHubPRCommand(BaseCommand):
     @cmd_route("token", "set")
     async def handle_set_token(self, token: str) -> tuple[bool, str]:
         """验证并安全保存 GitHub Token；绝不回显 Token。"""
+
+        stream_info = await stream_api.get_stream_info(self.stream_id)
+        chat_type = (stream_info or {}).get("chat_type")
+        if getattr(chat_type, "value", chat_type) != "private":
+            message = "为避免凭据出现在群聊记录中，请在主人私聊里设置 gh_token。"
+            await self._reply(message)
+            return False, message
 
         normalized = token.strip()
         if len(normalized) < 20 or any(char.isspace() for char in normalized):
