@@ -40,15 +40,15 @@ python -m playwright install chromium
 ```text
 /gh                                      显示帮助
 /gh list <owner/repo> [open|closed|all]  列出最多 20 个 PR
-/gh view <owner/repo#PR> [文件路径] [说明图 true|false] 截图并发送 PR 信息
+/gh view <owner/repo#PR> [文件路径] [说明图 true|false] [起始页] 截图并发送 PR 信息
 /gh approve <owner/repo#PR>              提交 APPROVE review
 /gh close <owner/repo#PR>                关闭尚未合并的 PR
 /gh merge <owner/repo#PR> [方式] [true|false] 检查规则后合并；true 请求强制绕过
 ```
 
-PR 标识支持 `octocat/Hello-World#42` 或完整的 GitHub PR URL。`view` 使用无头 Chromium 在同一条混合消息中发送 PR 描述、变更文件清单、GitHub 风格文件树图片和多张 diff 图片。可给出文件路径来只截图单个文件；末尾可加 `true` 额外发送 PR 说明图片，默认 `false`。
+PR 标识支持 `octocat/Hello-World#42` 或完整的 GitHub PR URL。`view` 使用无头 Chromium 在同一条混合消息中发送 PR 描述、变更文件清单、GitHub 风格文件树图片和多张 diff 图片。大型 PR 的 diff 按页查看：每次图片总数最多 12 张，包含文件树和可选的 PR 说明图；起始页默认是 1。文件清单和文件树仍包含 API 返回的全部变更文件。可给出文件路径来只查看该文件的分页 diff；末尾可加 `true` 额外发送 PR 说明图片，默认 `false`。
 
-示例：`/gh view owner/repo#42 true`，或 `/gh view owner/repo#42 src/command.py true`。
+示例：`/gh view owner/repo#42 true`；从第 12 页继续：`/gh view owner/repo#42 12`；指定文件并从第 12 页继续：`/gh view owner/repo#42 src/command.py false 12`。页码按当前筛选结果计算，下一段从上条消息提示的页码开始。
 
 `approve` 不能用于批准当前 Token 所属账号自己创建的 PR。遇到这种情况，请换用另一位对仓库有写入权限的用户 Token；插件会在提交 review 前提示这一限制。
 

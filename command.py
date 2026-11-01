@@ -26,7 +26,7 @@ _HELP = """/gh 用法：
   /gh token set <gh_token>                 在私聊设置个人 GitHub Token
   /gh token clear                         删除当前平台和用户 ID 的 Token
   /gh list <owner/repo> [open|closed|all]  列出 PR
-  /gh view <owner/repo#PR> [文件路径] [说明图 true|false] 查看 PR（默认不附说明图）
+  /gh view <owner/repo#PR> [文件路径] [说明图 true|false] [起始页] 查看 PR（每次最多 12 张图片）
   /gh approve <owner/repo#PR>              提交 APPROVE 审批
   /gh close <owner/repo#PR>                关闭 PR
   /gh merge <owner/repo#PR> [merge|squash|rebase] [true|false] 按规则合并；true 请求强制绕过
@@ -192,10 +192,31 @@ class GitHubPRCommand(BaseCommand):
         pr_ref: str,
         file_path: str = "",
         description_image: str = "false",
+        start_page: str = "1",
     ) -> tuple[bool, str]:
-        if file_path.strip().lower() in {"true", "false"} and description_image == "false":
-            description_image = file_path
+        file_option = file_path.strip()
+        description_option = description_image.strip()
+        start_option = start_page.strip()
+
+        # Keep the old optional-argument forms, and allow a page number directly
+        # after the PR reference or file path for convenient paging.
+        if file_option.lower() in {"true", "false"}:
+            if description_option.isdecimal() and start_option == "1":
+                start_option = description_option
+                description_image = file_option
+            elif description_option == "false" and start_option == "1":
+                description_image = file_option
             file_path = ""
+        elif file_option.isdecimal() and start_option == "1":
+            start_option = file_option
+            file_path = ""
+        elif description_option.isdecimal() and start_option == "1":
+            start_option = description_option
+            description_image = "false"
+        elif description_option.isdecimal() and start_option.lower() in {"true", "false"}:
+            description_image = start_option
+            start_option = description_option
+
         description_option = description_image.strip().lower()
         if description_option not in {"true", "false"}:
             message = "PR 说明图参数只能是 true 或 false，默认 false。"
@@ -203,18 +224,28 @@ class GitHubPRCommand(BaseCommand):
             return False, message
         include_description_image = description_option == "true"
         try:
+            start_page_number = int(start_option)
+            if start_page_number < 1:
+                raise ValueError
+        except ValueError:
+            message = "Diff 起始页必须是大于或等于 1 的整数。"
+            await self._reply(message)
+            return False, message
+        try:
             ref = parse_pr_ref(pr_ref)
             client = await self._client()
             pull, files = await asyncio.gather(
                 client.get_pull(ref), client.list_pull_files(ref)
             )
-            screenshots = await screenshot_pr_view(
+            render_result = await screenshot_pr_view(
                 repository=f"{ref.owner}/{ref.repo}",
                 pull=pull,
                 files=files,
                 file_filter=file_path,
                 include_description_image=include_description_image,
+                start_page=start_page_number,
             )
+            screenshots = render_result.images
         except Exception as exc:
             message = f"读取或截图 PR 失败：{exc}"
             await self._reply(message)
@@ -228,7 +259,7 @@ class GitHubPRCommand(BaseCommand):
             )
         description = str(pull.get("body") or "").strip() or "（无 PR 说明）"
         status = "已合并" if pull.get("merged") else str(pull.get("state", "unknown"))
-        diff_count = len(screenshots) - 1 - int(include_description_image)
+        diff_count = render_result.diff_pages_rendered
         overview_lines = [
             f"{ref.owner}/{ref.repo}#{ref.number} · {pull.get('title', '')}",
             f"作者：{((pull.get('user') or {}).get('login')) or 'unknown'} · 状态：{status}",
@@ -242,10 +273,17 @@ class GitHubPRCommand(BaseCommand):
         if file_path:
             overview_lines.extend(["", f"截图筛选：{file_path}"])
         description_image_status = "已附" if include_description_image else "未附"
+        last_page = start_page_number + render_result.diff_pages_rendered - 1
+        diff_summary = (
+            f"Diff 第 {start_page_number}–{last_page}/"
+            f"{render_result.diff_pages_total} 页（{diff_count} 张）"
+        )
+        if last_page < render_result.diff_pages_total:
+            diff_summary += f"；后续从第 {last_page + 1} 页继续"
         overview_lines.extend(
             [
                 "",
-                f"附图：文件树 1 张 · PR 说明图{description_image_status} · Diff {diff_count} 张",
+                f"附图：文件树 1 张 · PR 说明图{description_image_status} · {diff_summary}",
             ]
         )
         overview = "\n".join(line for line in overview_lines if line is not None)

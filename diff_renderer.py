@@ -4,10 +4,22 @@ from __future__ import annotations
 
 import html
 import re
+from dataclasses import dataclass
 from typing import Any
 
 
 _HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+_DIFF_LINES_PER_IMAGE = 72
+_MAX_IMAGE_ATTACHMENTS = 12
+
+
+@dataclass(frozen=True)
+class PRViewImages:
+    """截图和 diff 截图分页信息。"""
+
+    images: list[tuple[str, bytes]]
+    diff_pages_total: int
+    diff_pages_rendered: int
 
 
 def _escape(value: str) -> str:
@@ -202,8 +214,12 @@ async def screenshot_pr_view(
     files: list[dict[str, Any]],
     file_filter: str = "",
     include_description_image: bool = False,
-) -> list[tuple[str, bytes]]:
-    """渲染 GitHub 风格文件树、可选 PR 说明和分页面 diff 截图。"""
+    start_page: int = 1,
+) -> PRViewImages:
+    """渲染文件树、可选 PR 说明和从指定页开始的 diff 截图。"""
+
+    if start_page < 1:
+        raise ValueError("Diff 起始页必须大于或等于 1。")
 
     try:
         from playwright.async_api import async_playwright
@@ -224,20 +240,45 @@ async def screenshot_pr_view(
         if not selected:
             raise ValueError(f"PR 中找不到匹配的文件：{file_filter}")
 
-    pages: list[tuple[str, str, str]] = []
+    diff_pages_total = 0
+    for item in selected:
+        lines = str(item.get("patch", "")).splitlines()
+        chunk_count = max(
+            1, (len(lines) + _DIFF_LINES_PER_IMAGE - 1) // _DIFF_LINES_PER_IMAGE
+        )
+        diff_pages_total += chunk_count
+
+    if start_page > diff_pages_total and diff_pages_total:
+        raise ValueError(f"起始页超出范围；该 PR 当前筛选结果共 {diff_pages_total} 页。")
+
+    max_diff_images = _MAX_IMAGE_ATTACHMENTS - 1 - int(include_description_image)
+    pages: list[tuple[int, str, str, str]] = []
+    current_page = 0
+    end_page = start_page + max_diff_images
     for item in selected:
         file_name = str(item.get("filename", "(unknown file)"))
-        patch = str(item.get("patch", ""))
-        lines = patch.splitlines()
-        chunks = [lines[i : i + 52] for i in range(0, len(lines), 52)] or [[]]
-        for chunk_index, chunk in enumerate(chunks, start=1):
+        lines = str(item.get("patch", "")).splitlines()
+        chunk_count = max(
+            1, (len(lines) + _DIFF_LINES_PER_IMAGE - 1) // _DIFF_LINES_PER_IMAGE
+        )
+        for chunk_index in range(chunk_count):
+            current_page += 1
+            if current_page < start_page:
+                continue
+            if current_page >= end_page:
+                break
+            start = chunk_index * _DIFF_LINES_PER_IMAGE
+            chunk = lines[start : start + _DIFF_LINES_PER_IMAGE]
             pages.append(
                 (
+                    current_page,
                     file_name,
                     str(item.get("status", "modified")),
                     "\n".join(chunk),
                 )
             )
+        if current_page >= end_page:
+            break
 
     if not pages:
         raise ValueError("该 PR 没有可显示的文件 diff。")
@@ -268,8 +309,8 @@ async def screenshot_pr_view(
                 screenshots.append(("PR 说明", description_image))
 
             await page.set_viewport_size({"width": 1480, "height": 1100})
-            total = len(pages)
-            for index, (file_name, status, patch) in enumerate(pages, start=1):
+            total = diff_pages_total
+            for page_number, file_name, status, patch in pages:
                 await page.set_content(
                     _page_html(
                         repository=repository,
@@ -278,14 +319,18 @@ async def screenshot_pr_view(
                         file_name=file_name,
                         status=status,
                         patch=patch,
-                        page_number=index,
+                        page_number=page_number,
                         page_total=total,
                     ),
                     wait_until="domcontentloaded",
                 )
                 image = await page.screenshot(full_page=True, type="png")
-                suffix = f" · {index}/{total}" if total > 1 else ""
+                suffix = f" · {page_number}/{total}" if total > 1 else ""
                 screenshots.append((f"{file_name}{suffix}", image))
         finally:
             await browser.close()
-    return screenshots
+    return PRViewImages(
+        images=screenshots,
+        diff_pages_total=diff_pages_total,
+        diff_pages_rendered=len(pages),
+    )

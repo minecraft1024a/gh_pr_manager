@@ -131,17 +131,30 @@ class GitHubClient:
         )
 
     async def list_pull_files(self, ref: PullRequestRef) -> list[dict[str, Any]]:
-        files: list[dict[str, Any]] = []
-        for page in range(1, 4):
+        query = urlencode({"per_page": 100, "page": 1})
+        first_page = await self.request(
+            "GET", f"{ref.repo_path}/pulls/{ref.number}/files?{query}"
+        )
+        if not isinstance(first_page, list):
+            return []
+
+        files = list(first_page)
+        if len(first_page) < 100:
+            return files
+
+        # GitHub exposes at most 300 changed files for a pull request. Fetch
+        # the remaining two pages together so a large PR does not wait on two
+        # sequential network round trips.
+        async def fetch_page(page: int) -> list[dict[str, Any]]:
             query = urlencode({"per_page": 100, "page": page})
-            batch = await self.request(
+            result = await self.request(
                 "GET", f"{ref.repo_path}/pulls/{ref.number}/files?{query}"
             )
-            if not isinstance(batch, list):
-                break
+            return result if isinstance(result, list) else []
+
+        remaining_pages = await asyncio.gather(fetch_page(2), fetch_page(3))
+        for batch in remaining_pages:
             files.extend(batch)
-            if len(batch) < 100:
-                break
         return files
 
     async def list_reviews(self, ref: PullRequestRef) -> list[dict[str, Any]]:
