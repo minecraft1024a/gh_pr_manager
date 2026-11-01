@@ -49,6 +49,34 @@ class GitHubPRCommand(BaseCommand):
     async def _reply(self, text: str) -> None:
         await send_text(text, stream_id=self.stream_id)
 
+    def _make_view_message(
+        self, text: str, media: list[dict[str, str]], chat_type: str
+    ) -> Message:
+        return Message(
+            message_id=f"api_gh_pr_view_{uuid4().hex}",
+            content={"text": text, "media": media},
+            processed_plain_text=text,
+            message_type=MessageType.TEXT,
+            platform=str(self._message.platform or "") if self._message is not None else "",
+            chat_type=chat_type,
+            stream_id=self.stream_id,
+            media=media,
+        )
+
+    @staticmethod
+    def _split_view_text(text: str, limit: int = 1800) -> list[str]:
+        parts: list[str] = []
+        remaining = text
+        while len(remaining) > limit:
+            split_at = remaining.rfind("\n", 0, limit)
+            if split_at < limit // 2:
+                split_at = limit
+            parts.append(remaining[:split_at])
+            remaining = remaining[split_at:].lstrip("\n")
+        if remaining:
+            parts.append(remaining)
+        return parts
+
     def _identity(self) -> tuple[str, str]:
         """取得当前调用者的平台和平台用户 ID。"""
 
@@ -296,19 +324,52 @@ class GitHubPRCommand(BaseCommand):
             for _, image_bytes in screenshots
         ]
         stream_info = await stream_api.get_stream_info(self.stream_id)
-        mixed_message = Message(
-            message_id=f"api_gh_pr_view_{uuid4().hex}",
-            content={"text": overview, "media": media_items},
-            processed_plain_text=overview,
-            message_type=MessageType.TEXT,
-            platform=str(self._message.platform or "") if self._message is not None else "",
-            chat_type=str((stream_info or {}).get("chat_type") or "private"),
-            stream_id=self.stream_id,
-            media=media_items,
-        )
-        sent = await send_message(mixed_message)
+        chat_type = str((stream_info or {}).get("chat_type") or "private")
+        platform = str(self._message.platform or "").strip().lower() if self._message else ""
+        mixed_message = self._make_view_message(overview, media_items, chat_type)
+        onebot_platform = platform in {"qq", "onebot", "onebot_v11"}
+        fallback_attempted = len(media_items) > 3 and onebot_platform
+        sent = False if fallback_attempted else await send_message(mixed_message)
+        fallback_progress = ""
+        if not sent and len(media_items) > 3:
+            fallback_attempted = True
+            text_parts = self._split_view_text(overview)
+            image_batches = [
+                media_items[index : index + 3]
+                for index in range(0, len(media_items), 3)
+            ]
+            batch_count = max(len(text_parts), len(image_batches))
+            sent_images = 0
+            sent_text_parts = 0
+            for index in range(batch_count):
+                text_part = text_parts[index] if index < len(text_parts) else ""
+                if index == 0:
+                    text_part = "为兼容平台多图限制，本次分批发送。\n\n" + text_part
+                elif index < len(text_parts):
+                    text_part = f"PR 信息续（{index + 1}/{len(text_parts)}）：\n" + text_part
+                media_batch = image_batches[index] if index < len(image_batches) else []
+                part_sent = await send_message(
+                    self._make_view_message(text_part, media_batch, chat_type)
+                )
+                if not part_sent:
+                    fallback_progress = (
+                        f"分批发送在第 {index + 1}/{batch_count} 段失败；"
+                        f"已发送 {sent_images}/{len(media_items)} 张图片、"
+                        f"{sent_text_parts}/{len(text_parts)} 段文字。"
+                    )
+                    break
+                sent_images += len(media_batch)
+                sent_text_parts += int(index < len(text_parts))
+            else:
+                sent = True
         if not sent:
-            message = "PR 信息和 diff 截图未能作为混合消息发送，请检查当前平台对图文消息的支持。"
+            if fallback_attempted:
+                message = (
+                    "平台拒绝了完整图片组，自动分批后仍未全部发送。"
+                    f"{fallback_progress}请查看 OneBot/NapCat 端错误详情。"
+                )
+            else:
+                message = "PR 信息和 diff 截图未能发送，请检查当前平台对图文消息的支持。"
             await self._reply(message)
             return False, message
         return True, overview

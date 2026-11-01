@@ -46,7 +46,7 @@ python -m playwright install chromium
 /gh merge <owner/repo#PR> [方式] [true|false] 检查规则后合并；true 请求强制绕过
 ```
 
-PR 标识支持 `octocat/Hello-World#42` 或完整的 GitHub PR URL。`view` 使用无头 Chromium 在同一条混合消息中发送 PR 描述、变更文件清单、GitHub 风格文件树图片和多张 diff 图片。大型 PR 的 diff 按页查看：每次图片总数最多 12 张，包含文件树和可选的 PR 说明图；起始页默认是 1。文件清单和文件树仍包含 API 返回的全部变更文件。可给出文件路径来只查看该文件的分页 diff；末尾可加 `true` 额外发送 PR 说明图片，默认 `false`。
+PR 标识支持 `octocat/Hello-World#42` 或完整的 GitHub PR URL。`view` 使用无头 Chromium 在混合消息中发送 PR 描述、变更文件清单、GitHub 风格文件树图片和多张 diff 图片。大型 PR 的 diff 按页查看：单条消息图片总数最多 12 张，包含文件树和可选的 PR 说明图；起始页默认是 1。QQ/OneBot 图片超过 3 张时会分批发送，每条最多 3 张；其他平台若拒绝一次发送整组图片，也会自动分批。文件清单和文件树仍包含 API 返回的全部变更文件。可给出文件路径来只查看该文件的分页 diff；末尾可加 `true` 额外发送 PR 说明图片，默认 `false`。
 
 示例：`/gh view owner/repo#42 true`；从第 12 页继续：`/gh view owner/repo#42 12`；指定文件并从第 12 页继续：`/gh view owner/repo#42 src/command.py false 12`。页码按当前筛选结果计算，下一段从上条消息提示的页码开始。
 
